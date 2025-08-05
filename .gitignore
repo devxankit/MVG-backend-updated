@@ -1,0 +1,44 @@
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Logs
+logs/
+*.log
+
+DEPLOYMENT.md*
+
+# dotenv environment variables
+.env
+.env.*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build outputs
+frontend/build/
+frontend/dist/
+frontend/node_modules/
+
+# Editor directories and files
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# Misc
+*.tgz
+
+# Optional: ignore coverage reports
+coverage/
+
+# Optional: ignore local database
+*.sqlite
+*.db
+
+# Ignore OneDrive sync files
+*.lnk
+~$* 
