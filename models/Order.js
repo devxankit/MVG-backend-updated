@@ -85,13 +85,16 @@ const orderSchema = new mongoose.Schema({
   paymentMethod: {
     type: String,
     required: true,
-    enum: ['stripe', 'paypal', 'cod', 'credit-card', 'apple-pay', 'google-pay']
+    enum: ['stripe', 'paypal', 'cod', 'credit-card', 'apple-pay', 'google-pay', 'razorpay']
   },
   paymentResult: {
     id: String,
     status: String,
     update_time: String,
-    email_address: String
+    email_address: String,
+    // Optional razorpay fields for traceability
+    razorpay_order_id: String,
+    razorpay_signature: String
   },
   itemsPrice: {
     type: Number,

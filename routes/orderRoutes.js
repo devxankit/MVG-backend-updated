@@ -2,9 +2,16 @@ const express = require('express');
 const router = express.Router();
 const { protect } = require('../middleware/authMiddleware');
 const orderController = require('../controllers/orderController');
+const paymentController = require('../controllers/paymentController');
 
 // All routes are protected
 router.use(protect);
+
+// Payment routes should be declared BEFORE dynamic ':id' routes
+router.get('/payments/razorpay/key', paymentController.getRazorpayKey);
+router.post('/payments/razorpay/order', paymentController.createRazorpayOrder);
+router.post('/payments/razorpay/verify', paymentController.verifyRazorpayPayment);
+router.post('/payments/razorpay/capture', paymentController.capturePaymentForOrders);
 
 router.post('/', orderController.createOrder);
 router.get('/', orderController.getOrders);
