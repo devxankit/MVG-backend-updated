@@ -149,6 +149,10 @@ const orderSchema = new mongoose.Schema({
   sellerEarnings: {
     type: Number,
     default: 0
+  },
+  isEarningsCredited: {
+    type: Boolean,
+    default: false
   }
 }, {
   timestamps: true
@@ -181,11 +185,12 @@ orderSchema.pre('save', async function(next) {
   next();
 });
 
-// Virtual for order summary
+// Virtual for order summary (defensive for legacy/partial docs)
 orderSchema.virtual('orderSummary').get(function() {
+  const items = Array.isArray(this.orderItems) ? this.orderItems : [];
   return {
-    totalItems: this.orderItems.reduce((sum, item) => sum + item.quantity, 0),
-    totalPrice: this.totalPrice,
+    totalItems: items.reduce((sum, item) => sum + (item?.quantity || 0), 0),
+    totalPrice: this.totalPrice || 0,
     status: this.orderStatus
   };
 });

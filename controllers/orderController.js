@@ -186,7 +186,52 @@ exports.updateOrderStatus = asyncHandler(async (req, res) => {
   const { status } = req.body;
   const order = await Order.findById(req.params.id);
   if (!order) return res.status(404).json({ message: 'Order not found', route: req.originalUrl || req.url });
+  
+  const previousStatus = order.orderStatus;
   order.orderStatus = status;
+  
+  // If order is delivered and earnings haven't been credited yet
+  if (status === 'delivered' && !order.isEarningsCredited) {
+    try {
+      const Wallet = require('../models/Wallet');
+      
+      // Calculate seller earnings (total price - commission)
+      const commission = order.totalPrice * 0.10; // 10% commission
+      const sellerEarnings = order.totalPrice - commission;
+      
+      // Update order with earnings info
+      order.commission = commission;
+      order.sellerEarnings = sellerEarnings;
+      order.isEarningsCredited = true;
+      
+      // Find or create seller wallet
+      let wallet = await Wallet.findOne({ seller: order.seller });
+      if (!wallet) {
+        wallet = await Wallet.create({
+          seller: order.seller,
+          balance: 0,
+          totalEarnings: 0,
+          totalWithdrawn: 0,
+          pendingWithdrawals: 0,
+          transactions: []
+        });
+      }
+      
+      // Add earnings to wallet
+      await wallet.addTransaction(
+        'credit',
+        sellerEarnings,
+        `Earnings from order ${order.orderNumber}`,
+        order._id
+      );
+      
+      console.log(`Earnings credited for order ${order._id}: ₹${sellerEarnings}`);
+    } catch (error) {
+      console.error('Error crediting earnings:', error);
+      // Don't fail the order status update if earnings crediting fails
+    }
+  }
+  
   await order.save();
   res.json(order);
 });

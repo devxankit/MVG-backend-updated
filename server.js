@@ -21,6 +21,7 @@ const adminRoutes = require('./routes/adminRoutes');
 const categoryRoutes = require('./routes/categoryRoutes');
 const couponRoutes = require('./routes/couponRoutes');
 const translateRoutes = require('./routes/translateRoutes');
+const walletRoutes = require('./routes/walletRoutes');
 
 // Import middleware
 const { errorHandler } = require('./middleware/errorMiddleware');
@@ -135,6 +136,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/coupons', couponRoutes);
 app.use('/api/translate', translateRoutes);
+app.use('/api/wallet', walletRoutes);
 
 // Test route to verify server is working
 app.get('/api/test', (req, res) => {
