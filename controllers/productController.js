@@ -5,54 +5,94 @@ const SellerProduct = require('../models/SellerProduct');
 
 // Get all products (public)
 exports.getProducts = asyncHandler(async (req, res) => {
-  // Only return products that have a seller (i.e., are public)
-  const products = await Product.find({ seller: { $ne: null } })
-    .populate('category', 'name')
-    .populate('subCategory', 'name');
-  res.json(products);
+  try {
+    // Get all active seller listings with populated product info
+    const sellerProducts = await SellerProduct.find({ isListed: true })
+      .populate({
+        path: 'product',
+        populate: [
+          { path: 'category', select: 'name' },
+          { path: 'subCategory', select: 'name' }
+        ]
+      });
+
+    // Create a map to track which products we've already processed
+    const processedProducts = new Map();
+    const products = [];
+
+    // Process each seller listing to get unique products
+    sellerProducts.forEach(sellerProduct => {
+      const productId = sellerProduct.product._id.toString();
+      
+      if (!processedProducts.has(productId)) {
+        const productObj = sellerProduct.product.toObject();
+        products.push(productObj);
+        processedProducts.set(productId, true);
+      }
+    });
+
+    res.json(products);
+  } catch (error) {
+    console.error('Error in getProducts:', error);
+    res.status(500).json({ message: 'Failed to fetch products', error: error.message });
+  }
 });
 
 // Get all products with seller information for frontend (including SellerProduct data)
 exports.getProductsWithSellerInfo = asyncHandler(async (req, res) => {
   try {
-    // Get all products that have sellers
-    const products = await Product.find({ seller: { $ne: null } })
-      .populate('category', 'name')
-      .populate('subCategory', 'name')
-      .populate('seller', 'shopName');
-
-    // Get all active seller listings
+    // Get all active seller listings with populated product and seller info
     const sellerProducts = await SellerProduct.find({ isListed: true })
       .populate('seller', 'shopName')
-      .populate('product');
+      .populate({
+        path: 'product',
+        populate: [
+          { path: 'category', select: 'name' },
+          { path: 'subCategory', select: 'name' }
+        ]
+      });
 
-    // Create a map of product ID to seller products
-    const sellerProductMap = {};
-    sellerProducts.forEach(sp => {
-      if (!sellerProductMap[sp.product._id]) {
-        sellerProductMap[sp.product._id] = [];
-      }
-      sellerProductMap[sp.product._id].push(sp);
-    });
-
-    // Enhance products with seller information
-    const enhancedProducts = products.map(product => {
-      const productObj = product.toObject();
-      const sellerListings = sellerProductMap[product._id] || [];
-      
-      // If there are seller listings, use the lowest price
-      if (sellerListings.length > 0) {
-        const lowestPriceListing = sellerListings.reduce((lowest, current) => 
+    // Create a map to track which products we've already processed
+    const processedProducts = new Map();
+    const enhancedProducts = [];
+    
+    sellerProducts.forEach(sellerProduct => {
+      if (!sellerProduct.product) return; // skip if product template is missing
+      const productId = sellerProduct.product._id.toString();
+      if (!processedProducts.has(productId)) {
+        // Create enhanced product object from admin template product
+        const productObj = sellerProduct.product.toObject();
+        // Get all seller listings for this product
+        const allListingsForProduct = sellerProducts.filter(sp => sp.product && sp.product._id.toString() === productId);
+        // Find the lowest price listing
+        const lowestPriceListing = allListingsForProduct.reduce((lowest, current) =>
           current.sellerPrice < lowest.sellerPrice ? current : lowest
         );
+        // Enhance the product with seller information
         productObj.sellerPrice = lowestPriceListing.sellerPrice;
         productObj.seller = lowestPriceListing.seller;
         productObj.sellerProductId = lowestPriceListing._id;
+        productObj.availableSellers = allListingsForProduct.map(sp => ({
+          seller: sp.seller,
+          price: sp.sellerPrice,
+          sellerProductId: sp._id
+        }));
+        // Add total stock calculation if available
+        if (productObj.getTotalStock) {
+          productObj.totalStock = productObj.getTotalStock();
+        }
+        // Add price range if available
+        if (productObj.getPriceRange) {
+          productObj.priceRange = productObj.getPriceRange();
+        }
+        // Add available variants if available
+        if (productObj.getAvailableVariants) {
+          productObj.availableVariants = productObj.getAvailableVariants();
+        }
+        enhancedProducts.push(productObj);
+        processedProducts.set(productId, true);
       }
-      
-      return productObj;
     });
-
     res.json(enhancedProducts);
   } catch (error) {
     console.error('Error in getProductsWithSellerInfo:', error);
@@ -63,13 +103,30 @@ exports.getProductsWithSellerInfo = asyncHandler(async (req, res) => {
 // Get product by ID with seller information
 exports.getProductWithSellerInfo = asyncHandler(async (req, res) => {
   try {
-    const product = await Product.findById(req.params.id)
+    // First, try to find the product directly
+    let product = await Product.findById(req.params.id)
       .populate('category', 'name')
       .populate('subCategory', 'name')
       .populate('seller', 'shopName');
     
+    // If product not found, check if it's an admin template product that has seller listings
     if (!product) {
-      return res.status(404).json({ message: 'Product not found', route: req.originalUrl || req.url });
+      const sellerProduct = await SellerProduct.findOne({ 
+        product: req.params.id, 
+        isListed: true 
+      }).populate({
+        path: 'product',
+        populate: [
+          { path: 'category', select: 'name' },
+          { path: 'subCategory', select: 'name' }
+        ]
+      });
+      
+      if (sellerProduct) {
+        product = sellerProduct.product;
+      } else {
+        return res.status(404).json({ message: 'Product not found', route: req.originalUrl || req.url });
+      }
     }
 
     // Get seller listings for this product
@@ -79,10 +136,18 @@ exports.getProductWithSellerInfo = asyncHandler(async (req, res) => {
     }).populate('seller', 'shopName');
 
     const productData = product.toObject();
-    productData.totalStock = product.getTotalStock();
-    productData.priceRange = product.getPriceRange();
-    productData.availableVariants = product.getAvailableVariants();
-    productData.soldCount = product.soldCount;
+    
+    // Add calculated fields if methods exist
+    if (product.getTotalStock) {
+      productData.totalStock = product.getTotalStock();
+    }
+    if (product.getPriceRange) {
+      productData.priceRange = product.getPriceRange();
+    }
+    if (product.getAvailableVariants) {
+      productData.availableVariants = product.getAvailableVariants();
+    }
+    productData.soldCount = product.soldCount || 0;
 
     // If there are seller listings, use the lowest price
     if (sellerProducts.length > 0) {
@@ -145,51 +210,132 @@ exports.getProductVariant = asyncHandler(async (req, res) => {
 });
 
 // Get featured products
-exports.getFeaturedProducts = async (req, res) => {
-  try {
-    const products = await Product.find({ isFeatured: true })
-      .populate('category', 'name')
-      .populate('subCategory', 'name')
-      .sort({ updatedAt: -1 })
-      .limit(8);
-    res.json(products);
-  } catch (error) {
-    res.status(500).json({ message: 'Failed to fetch featured products', error: error.message });
-  }
-};
+exports.getFeaturedProducts = asyncHandler(async (req, res) => {
+  // First, get all admin-selected featured products
+  const featuredProducts = await Product.find({ 
+    isFeatured: true,
+    seller: null // Only admin templates
+  }).select('_id');
 
-// Placeholder: Search products
-exports.searchProducts = asyncHandler(async (req, res) => {
-  const { query } = req.query;
-  if (!query || query.trim().length === 0) {
-    return res.json([]);
-  }
-  // Case-insensitive search in name or description
-  const products = await Product.find({
+  // Get all SellerProduct listings that reference these featured products OR are individually featured
+  const featuredListings = await SellerProduct.find({ 
+    isListed: true,
     $or: [
-      { name: { $regex: query, $options: 'i' } },
-      { description: { $regex: query, $options: 'i' } }
+      { product: { $in: featuredProducts.map(p => p._id) } },
+      { isFeatured: true } // Individually featured seller listings
     ]
   })
-    .sort({ numReviews: -1 })
-    .limit(8)
-    .select('_id name price images numReviews');
-  res.json(products);
+    .populate({
+      path: 'product',
+      populate: [
+        { path: 'category', select: 'name' },
+        { path: 'subCategory', select: 'name' }
+      ]
+    })
+    .populate('seller', 'shopName')
+    .sort({ createdAt: -1 })
+    .limit(20);
+
+  res.json(featuredListings);
+});
+
+// Search products
+exports.searchProducts = asyncHandler(async (req, res) => {
+  const { q, category, minPrice, maxPrice, sortBy = 'relevance', page = 1, limit = 12 } = req.query;
+  
+  const searchQuery = { isListed: true };
+  
+  if (q) {
+    searchQuery['product.name'] = { $regex: q, $options: 'i' };
+  }
+  
+  if (category) {
+    searchQuery['product.category'] = category;
+  }
+  
+  if (minPrice || maxPrice) {
+    searchQuery.sellerPrice = {};
+    if (minPrice) searchQuery.sellerPrice.$gte = parseFloat(minPrice);
+    if (maxPrice) searchQuery.sellerPrice.$lte = parseFloat(maxPrice);
+  }
+
+  const skip = (parseInt(page) - 1) * parseInt(limit);
+  
+  const listings = await SellerProduct.find(searchQuery)
+    .populate({
+      path: 'product',
+      populate: [
+        { path: 'category', select: 'name' },
+        { path: 'subCategory', select: 'name' }
+      ]
+    })
+    .populate('seller', 'shopName')
+    .sort(sortBy === 'price-low' ? { sellerPrice: 1 } : 
+          sortBy === 'price-high' ? { sellerPrice: -1 } : 
+          sortBy === 'rating' ? { 'product.rating': -1 } : 
+          { 'product.name': 1 })
+    .skip(skip)
+    .limit(parseInt(limit));
+
+  const total = await SellerProduct.countDocuments(searchQuery);
+
+  res.json({
+    products: listings,
+    pagination: {
+      page: parseInt(page),
+      limit: parseInt(limit),
+      total,
+      pages: Math.ceil(total / parseInt(limit))
+    }
+  });
 });
 
 // Get products by category (public)
 exports.getProductsByCategory = asyncHandler(async (req, res) => {
-  const categoryId = req.params.categoryId;
-  // Only return products that have a seller (i.e., are public)
-  const products = await Product.find({
-    $and: [
-      { seller: { $ne: null } },
-      { $or: [ { category: categoryId }, { subCategory: categoryId } ] }
+  const { categoryId } = req.params;
+  const { page = 1, limit = 12, sortBy = 'name' } = req.query;
+  
+  const skip = (parseInt(page) - 1) * parseInt(limit);
+  
+  const listings = await SellerProduct.find({
+    isListed: true,
+    $or: [
+      { 'product.category': categoryId },
+      { 'product.subCategory': categoryId }
     ]
   })
-    .populate('category', 'name')
-    .populate('subCategory', 'name');
-  res.json(products);
+    .populate({
+      path: 'product',
+      populate: [
+        { path: 'category', select: 'name' },
+        { path: 'subCategory', select: 'name' }
+      ]
+    })
+    .populate('seller', 'shopName')
+    .sort(sortBy === 'price-low' ? { sellerPrice: 1 } : 
+          sortBy === 'price-high' ? { sellerPrice: -1 } : 
+          sortBy === 'rating' ? { 'product.rating': -1 } : 
+          { 'product.name': 1 })
+    .skip(skip)
+    .limit(parseInt(limit));
+
+  const total = await SellerProduct.countDocuments({
+    isListed: true,
+    $or: [
+      { 'product.category': categoryId },
+      { 'product.subCategory': categoryId }
+    ]
+  });
+
+  res.json({
+    products: listings,
+    pagination: {
+      page: parseInt(page),
+      limit: parseInt(limit),
+      total,
+      pages: Math.ceil(total / parseInt(limit))
+    }
+  });
 });
 
 // Add review to product
@@ -638,32 +784,64 @@ exports.deleteEventBanner = async (req, res) => {
 }; 
 
 // Get discover products
-exports.getDiscoverProducts = async (req, res) => {
-  try {
-    const products = await Product.find({ isDiscover: true, isApproved: true })
-      .populate('category', 'name')
-      .populate('subCategory', 'name')
-      .sort({ updatedAt: -1 })
-      .limit(8);
-    res.json(products);
-  } catch (error) {
-    res.status(500).json({ message: 'Failed to fetch discover products', error: error.message });
-  }
-};
+exports.getDiscoverProducts = asyncHandler(async (req, res) => {
+  // First, get all admin-selected discover products
+  const discoverProducts = await Product.find({ 
+    isDiscover: true,
+    seller: null // Only admin templates
+  }).select('_id');
+
+  // Get all SellerProduct listings that reference these discover products OR are individually discovered
+  const discoverListings = await SellerProduct.find({ 
+    isListed: true,
+    $or: [
+      { product: { $in: discoverProducts.map(p => p._id) } },
+      { isDiscover: true } // Individually discovered seller listings
+    ]
+  })
+    .populate({
+      path: 'product',
+      populate: [
+        { path: 'category', select: 'name' },
+        { path: 'subCategory', select: 'name' }
+      ]
+    })
+    .populate('seller', 'shopName')
+    .sort({ createdAt: -1 })
+    .limit(20);
+
+  res.json(discoverListings);
+});
 
 // Get recommended products
-exports.getRecommendedProducts = async (req, res) => {
-  try {
-    const products = await Product.find({ isRecommended: true, isApproved: true })
-      .populate('category', 'name')
-      .populate('subCategory', 'name')
-      .sort({ updatedAt: -1 })
-      .limit(8);
-    res.json(products);
-  } catch (error) {
-    res.status(500).json({ message: 'Failed to fetch recommended products', error: error.message });
-  }
-};
+exports.getRecommendedProducts = asyncHandler(async (req, res) => {
+  // First, get all admin-selected recommended products
+  const recommendedProducts = await Product.find({ 
+    isRecommended: true,
+    seller: null // Only admin templates
+  }).select('_id');
+
+  // Get all SellerProduct listings that reference these recommended products OR are individually recommended
+  const recommendedListings = await SellerProduct.find({ 
+    isListed: true,
+    $or: [
+      { product: { $in: recommendedProducts.map(p => p._id) } },
+      { isRecommended: true } // Individually recommended seller listings
+    ]
+  })
+    .populate({
+      path: 'product',
+      populate: [
+        { path: 'category', select: 'name' },
+        { path: 'subCategory', select: 'name' }
+      ]
+    })
+    .populate('seller', 'shopName')
+    .sort({ createdAt: -1 })
+    .limit(20);
+
+  res.json(recommendedListings);
+});
 
 // Admin: Set/unset discover product
 exports.setDiscoverProduct = async (req, res) => {
@@ -698,9 +876,17 @@ exports.unsetRecommendedProduct = async (req, res) => {
 }; 
 
 exports.createProductBySellerSimple = async (req, res) => {
-  const { name, price, category, subCategory } = req.body;
-  const product = await Product.create({ name, price, category, subCategory });
-  res.json(product);
+  try {
+    const { name, price, category, subCategory, ...rest } = req.body;
+    // Create the product as an admin template (no seller field)
+    const product = await Product.create({ name, price, category, subCategory, ...rest });
+    // Create the seller listing for this product
+    const sellerId = req.user.sellerId || req.user._id;
+    const sellerProduct = await SellerProduct.create({ seller: sellerId, product: product._id, sellerPrice: price });
+    res.status(201).json({ product, sellerProduct });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to create product', error: error.message });
+  }
 };
 
 
@@ -831,7 +1017,7 @@ exports.getAllSellerListings = asyncHandler(async (req, res) => {
   res.json(listings);
 });
 
-// Feature/unfeature SellerProduct
+// Feature/unfeature SellerProduct (admin can feature specific seller listings)
 exports.featureSellerProduct = async (req, res) => {
   const sellerProduct = await SellerProduct.findById(req.params.id);
   if (!sellerProduct) return res.status(404).json({ message: 'Seller listing not found' });
@@ -846,7 +1032,8 @@ exports.unfeatureSellerProduct = async (req, res) => {
   await sellerProduct.save();
   res.json(sellerProduct);
 };
-// Discover/undiscover SellerProduct
+
+// Discover/undiscover SellerProduct (admin can discover specific seller listings)
 exports.discoverSellerProduct = async (req, res) => {
   const sellerProduct = await SellerProduct.findById(req.params.id);
   if (!sellerProduct) return res.status(404).json({ message: 'Seller listing not found' });
@@ -861,7 +1048,8 @@ exports.undiscoverSellerProduct = async (req, res) => {
   await sellerProduct.save();
   res.json(sellerProduct);
 };
-// Recommend/unrecommend SellerProduct
+
+// Recommend/unrecommend SellerProduct (admin can recommend specific seller listings)
 exports.recommendSellerProduct = async (req, res) => {
   const sellerProduct = await SellerProduct.findById(req.params.id);
   if (!sellerProduct) return res.status(404).json({ message: 'Seller listing not found' });
@@ -876,3 +1064,16 @@ exports.unrecommendSellerProduct = async (req, res) => {
   await sellerProduct.save();
   res.json(sellerProduct);
 };
+
+exports.getListedProducts = asyncHandler(async (req, res) => {
+  const listings = await SellerProduct.find({ isListed: true })
+    .populate({
+      path: 'product',
+      populate: [
+        { path: 'category', select: 'name' },
+        { path: 'subCategory', select: 'name' }
+      ]
+    })
+    .populate('seller', 'shopName');
+  res.json(listings);
+});

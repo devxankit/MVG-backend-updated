@@ -288,16 +288,13 @@ exports.createProduct = async (req, res) => {
     const seller = await Seller.findOne({ userId: req.user._id });
     if (!seller) return res.status(404).json({ message: 'Seller not found' });
 
-    const { name, price, category, subCategory } = req.body;
-
+    const { name, price, category, subCategory, ...rest } = req.body;
     if (!name || !price || !category || !subCategory) {
       return res.status(400).json({ message: 'Name, price, category, and subCategory are required.' });
     }
-
     if (!mongoose.Types.ObjectId.isValid(category)) {
       return res.status(400).json({ message: 'Invalid category ID' });
     }
-
     if (!mongoose.Types.ObjectId.isValid(subCategory)) {
       return res.status(400).json({ message: 'Invalid subCategory ID' });
     }
@@ -316,27 +313,31 @@ exports.createProduct = async (req, res) => {
         imageUrls.push({ url: uploadResult.secure_url });
       }
     }
-
-    // Add fallback image
     if (imageUrls.length === 0) {
       imageUrls = [{ url: 'https://res.cloudinary.com/demo/image/upload/v1690000000/products/default-product.png' }];
     }
 
+    // Create the product as an admin template (no seller field)
     const product = new Product({
       name,
       price: Number(price),
       images: imageUrls,
       category,
       subCategory,
+      ...rest
+    });
+    await product.save();
+
+    // Create the seller listing for this product
+    const sellerProduct = await require('../models/SellerProduct').create({
       seller: seller._id,
-      isActive: true,
-      isApproved: false,
+      product: product._id,
+      sellerPrice: Number(price)
     });
 
-    await product.save();
-    res.status(201).json(product);
+    res.status(201).json({ product, sellerProduct });
   } catch (error) {
-    console.error('Error creating simple product:', error);
+    console.error('Error creating product:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
