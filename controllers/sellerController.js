@@ -4,6 +4,7 @@ const Product = require('../models/Product');
 const cloudinary = require('../utils/cloudinary');
 const Category = require('../models/Category');
 const mongoose = require('mongoose');
+const { UNITS } = require('../utils/units');
 
 // Register a new seller (vendor request)
 exports.register = async (req, res) => {
@@ -332,7 +333,9 @@ exports.createProduct = async (req, res) => {
     const sellerProduct = await require('../models/SellerProduct').create({
       seller: seller._id,
       product: product._id,
-      sellerPrice: Number(price)
+      sellerPrice: Number(price),
+      sellerStock: Number(product.stock) || 0, // Use product stock as default
+      unit: product.unit || UNITS.KG // Inherit unit from product
     });
 
     res.status(201).json({ product, sellerProduct });
@@ -449,6 +452,8 @@ exports.updateSoldCount = async (req, res) => {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
+
+
 
 // Placeholder: Get seller orders
 exports.getOrders = (req, res) => {

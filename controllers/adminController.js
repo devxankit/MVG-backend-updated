@@ -4,6 +4,7 @@ const User = require('../models/User');
 const { asyncHandler } = require('../middleware/errorMiddleware');
 const Product = require('../models/Product');
 const cloudinary = require('../utils/cloudinary');
+const { UNITS, getDefaultUnit, isValidUnit } = require('../utils/units');
 
 // Get all sellers (with approval status)
 exports.getSellers = asyncHandler(async (req, res) => {
@@ -57,7 +58,8 @@ exports.createProductByAdmin = asyncHandler(async (req, res) => {
     comparePrice,
     features,
     specifications,
-    tags
+    tags,
+    unit
   } = req.body;
 
   // Validate required fields
@@ -78,6 +80,11 @@ exports.createProductByAdmin = asyncHandler(async (req, res) => {
   // Validate ObjectIds
   if (!mongoose.Types.ObjectId.isValid(category) || !mongoose.Types.ObjectId.isValid(subCategory)) {
     return res.status(400).json({ message: 'Invalid category or subCategory ID' });
+  }
+
+  // Validate unit if provided
+  if (unit && !isValidUnit(unit)) {
+    return res.status(400).json({ message: 'Invalid unit. Must be either KG or Liter' });
   }
 
   // Handle image uploads
@@ -165,6 +172,7 @@ exports.createProductByAdmin = asyncHandler(async (req, res) => {
     subCategory,
     stock: parseInt(stock),
     brand,
+    unit: unit || UNITS.KG, // Use provided unit or default to KG
     images: imageUrls,
     features: parsedFeatures,
     specifications: parsedSpecifications,

@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { UNITS, getDefaultUnit, isValidUnit } = require('../utils/units');
 
 const reviewSchema = new mongoose.Schema({
   user: {
@@ -135,6 +136,14 @@ const productSchema = new mongoose.Schema({
     type: Number,
     required: [true, 'Please provide a product price'],
     min: [0, 'Price cannot be negative']
+  },
+  unit: {
+    type: String,
+    enum: {
+      values: Object.values(UNITS),
+      message: 'Unit must be either KG or Liter'
+    },
+    default: UNITS.KG
   },
   comparePrice: {
     type: Number,
@@ -309,11 +318,25 @@ productSchema.virtual('inStock').get(function() {
 // Ensure virtual fields are serialized
 productSchema.set('toJSON', { virtuals: true });
 
-// Pre-save middleware to update approval date
-productSchema.pre('save', function(next) {
+// Pre-save middleware to update approval date and set default unit
+productSchema.pre('save', async function(next) {
   if (this.isModified('isApproved') && this.isApproved && !this.approvalDate) {
     this.approvalDate = new Date();
   }
+  
+  // Set default unit based on category if not provided
+  if (!this.unit && this.category) {
+    try {
+      const Category = require('./Category');
+      const category = await Category.findById(this.category);
+      if (category) {
+        this.unit = getDefaultUnit(category.name);
+      }
+    } catch (error) {
+      console.error('Error setting default unit:', error);
+    }
+  }
+  
   next();
 });
 

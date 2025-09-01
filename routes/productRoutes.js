@@ -80,6 +80,7 @@ router.post('/:id/variant-option-image', protect, authorize('seller'), upload.si
 // Seller routes
 router.post('/seller/list', protect, productController.sellerListProduct);
 router.put('/seller/price', protect, productController.sellerUpdatePrice);
+router.put('/seller/stock', protect, productController.sellerUpdateStock);
 router.put('/seller/unlist', protect, productController.sellerUnlistProduct);
 router.get('/seller/listings', protect, productController.sellerGetListings);
 // Admin route

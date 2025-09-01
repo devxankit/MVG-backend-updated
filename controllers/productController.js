@@ -155,11 +155,13 @@ exports.getProductWithSellerInfo = asyncHandler(async (req, res) => {
         current.sellerPrice < lowest.sellerPrice ? current : lowest
       );
       productData.sellerPrice = lowestPriceListing.sellerPrice;
+      productData.sellerStock = lowestPriceListing.sellerStock; // Include seller stock
       productData.seller = lowestPriceListing.seller;
       productData.sellerProductId = lowestPriceListing._id;
       productData.availableSellers = sellerProducts.map(sp => ({
         seller: sp.seller,
         price: sp.sellerPrice,
+        stock: sp.sellerStock, // Include stock for each seller
         sellerProductId: sp._id
       }));
     }
@@ -397,6 +399,15 @@ exports.rejectProduct = asyncHandler(async (req, res) => {
 exports.adminEditProduct = asyncHandler(async (req, res) => {
   const product = await Product.findById(req.params.id);
   if (!product) return res.status(404).json({ message: 'Product not found', route: req.originalUrl || req.url });
+  
+  // Validate unit if provided
+  if (req.body.unit) {
+    const { isValidUnit } = require('../utils/units');
+    if (!isValidUnit(req.body.unit)) {
+      return res.status(400).json({ message: 'Invalid unit. Must be either KG or Liter' });
+    }
+  }
+  
   Object.assign(product, req.body);
   await product.save();
   res.json(product);
@@ -923,8 +934,13 @@ exports.createProductBySellerSimple = async (req, res) => {
 // Seller: List a product (create SellerProduct)
 exports.sellerListProduct = async (req, res) => {
   try {
-    const { productId, sellerPrice } = req.body;
+    const { productId, sellerPrice, sellerStock } = req.body;
     const sellerId = req.user.sellerId || req.user._id; // adapt as needed
+    
+    // Get the product to use its stock as default if sellerStock not provided
+    const product = await Product.findById(productId);
+    const defaultStock = sellerStock !== undefined ? sellerStock : (product?.stock || 0);
+    
     // Prevent duplicate listing
     const existing = await SellerProduct.findOne({ seller: sellerId, product: productId });
     if (existing && existing.isListed) {
@@ -933,11 +949,17 @@ exports.sellerListProduct = async (req, res) => {
     let sellerProduct;
     if (existing) {
       existing.sellerPrice = sellerPrice;
+      existing.sellerStock = defaultStock;
       existing.isListed = true;
       await existing.save();
       sellerProduct = existing;
     } else {
-      sellerProduct = await SellerProduct.create({ seller: sellerId, product: productId, sellerPrice });
+      sellerProduct = await SellerProduct.create({ 
+        seller: sellerId, 
+        product: productId, 
+        sellerPrice, 
+        sellerStock: defaultStock 
+      });
     }
     res.status(201).json(sellerProduct);
   } catch (error) {
@@ -954,6 +976,31 @@ exports.sellerUpdatePrice = async (req, res) => {
     sellerProduct.sellerPrice = sellerPrice;
     await sellerProduct.save();
     res.json(sellerProduct);
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
+// Seller: Update stock
+exports.sellerUpdateStock = async (req, res) => {
+  try {
+    const { sellerProductId, stock } = req.body;
+    const sellerId = req.user.sellerId || req.user._id;
+    
+    if (stock < 0) {
+      return res.status(400).json({ message: 'Stock cannot be negative' });
+    }
+    
+    const sellerProduct = await SellerProduct.findOne({ _id: sellerProductId, seller: sellerId });
+    if (!sellerProduct) return res.status(404).json({ message: 'Listing not found' });
+    
+    sellerProduct.sellerStock = Number(stock);
+    await sellerProduct.save();
+    
+    res.json({ 
+      message: 'Stock updated successfully', 
+      sellerProduct: await sellerProduct.populate('product', 'name images') 
+    });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
