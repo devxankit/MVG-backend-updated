@@ -10,6 +10,7 @@ const {
   processWithdrawal,
   getAdminWalletOverview,
   getSellerEarningsReport,
+  getSellerTransactions,
   // admin tools
   adminResyncSellerWallet,
   adminResyncOrderToWallet
@@ -25,6 +26,7 @@ router.post('/withdraw', protect, sellerAuth, createWithdrawalRequest);
 // Admin wallet routes
 router.get('/admin/overview', protect, adminAuth, getAdminWalletOverview);
 router.get('/admin/sellers', protect, adminAuth, getSellerEarningsReport);
+router.get('/admin/seller/:sellerId/transactions', protect, adminAuth, getSellerTransactions);
 router.get('/admin/withdrawals', protect, adminAuth, getWithdrawalRequests);
 router.put('/admin/withdrawals/:id/approve', protect, adminAuth, approveWithdrawal);
 router.put('/admin/withdrawals/:id/reject', protect, adminAuth, rejectWithdrawal);

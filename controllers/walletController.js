@@ -646,6 +646,51 @@ const getSellerEarningsReport = asyncHandler(async (req, res) => {
   });
 });
 
+// @desc    Get seller transaction history (Admin)
+// @route   GET /api/admin/wallet/seller/:sellerId/transactions
+// @access  Private (Admin)
+const getSellerTransactions = asyncHandler(async (req, res) => {
+  const { sellerId } = req.params;
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 20;
+  const skip = (page - 1) * limit;
+  
+  const wallet = await Wallet.findOne({ seller: sellerId })
+    .populate('seller', 'businessName email phone isApproved');
+  
+  if (!wallet) {
+    return res.status(404).json({
+      success: false,
+      message: 'Wallet not found for this seller'
+    });
+  }
+  
+  // Get transactions with pagination
+  const transactions = wallet.transactions
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .slice(skip, skip + limit);
+  
+  res.json({
+    success: true,
+    data: {
+      transactions,
+      wallet: {
+        _id: wallet._id,
+        balance: wallet.balance,
+        totalEarnings: wallet.totalEarnings,
+        totalWithdrawn: wallet.totalWithdrawn,
+        seller: wallet.seller
+      },
+      pagination: {
+        page,
+        limit,
+        total: wallet.transactions.length,
+        totalPages: Math.ceil(wallet.transactions.length / limit)
+      }
+    }
+  });
+});
+
 module.exports = {
   getSellerWallet,
   getTransactionHistory,
@@ -656,6 +701,7 @@ module.exports = {
   processWithdrawal,
   getAdminWalletOverview,
   getSellerEarningsReport,
+  getSellerTransactions,
   adminResyncSellerWallet,
   adminResyncOrderToWallet,
   // expose for maintenance route
