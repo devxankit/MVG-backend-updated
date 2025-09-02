@@ -48,7 +48,7 @@ router.delete('/:id/reviews', protect, productController.deleteReview);
 // Admin-only product management
 router.put('/:id/approve', protect, authorize('admin'), productController.approveProduct);
 router.put('/:id/reject', protect, authorize('admin'), productController.rejectProduct);
-router.put('/:id', protect, authorize('admin'), productController.adminEditProduct);
+router.put('/:id', protect, authorize('admin'), upload.array('images'), productController.adminEditProduct);
 router.delete('/:id', protect, authorize('admin'), productController.adminDeleteProduct);
 
 // Admin-only: Set/unset featured product

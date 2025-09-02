@@ -1,7 +1,9 @@
+const mongoose = require('mongoose');
 const Product = require('../models/Product');
 const { asyncHandler } = require('../middleware/errorMiddleware');
 const EventBanner = require('../models/EventBanner');
 const SellerProduct = require('../models/SellerProduct');
+const cloudinary = require('../utils/cloudinary');
 
 // Get all products (public)
 exports.getProducts = asyncHandler(async (req, res) => {
@@ -400,17 +402,89 @@ exports.adminEditProduct = asyncHandler(async (req, res) => {
   const product = await Product.findById(req.params.id);
   if (!product) return res.status(404).json({ message: 'Product not found', route: req.originalUrl || req.url });
   
+  const {
+    name,
+    price,
+    description,
+    productDescription,
+    sku,
+    category,
+    subCategory,
+    stock,
+    brand,
+    comparePrice,
+    features,
+    tags,
+    unit
+  } = req.body;
+
+  // Validate required fields
+  if (
+    !name ||
+    !price ||
+    !description ||
+    !productDescription ||
+    !sku ||
+    !category ||
+    !subCategory ||
+    stock == null ||
+    !brand
+  ) {
+    return res.status(400).json({ message: 'Please provide all required fields' });
+  }
+
+  // Validate ObjectIds
+  if (!mongoose.Types.ObjectId.isValid(category) || !mongoose.Types.ObjectId.isValid(subCategory)) {
+    return res.status(400).json({ message: 'Invalid category or subCategory ID' });
+  }
+
   // Validate unit if provided
-  if (req.body.unit) {
+  if (unit) {
     const { isValidUnit } = require('../utils/units');
-    if (!isValidUnit(req.body.unit)) {
+    if (!isValidUnit(unit)) {
       return res.status(400).json({ message: 'Invalid unit. Must be either KG or Liter' });
     }
   }
-  
-  Object.assign(product, req.body);
+
+  // Handle image uploads
+  let imageUrls = [];
+  if (req.files && req.files.length > 0) {
+    try {
+      for (const file of req.files) {
+        const result = await cloudinary.uploader.upload(file.buffer, {
+          folder: 'products',
+          resource_type: 'auto'
+        });
+        imageUrls.push({ url: result.secure_url, public_id: result.public_id });
+      }
+    } catch (error) {
+      console.error('Error uploading images:', error);
+      return res.status(500).json({ message: 'Error uploading images' });
+    }
+  }
+
+  // Update product fields
+  product.name = name;
+  product.price = price;
+  product.description = description;
+  product.productDescription = productDescription;
+  product.sku = sku;
+  product.category = category;
+  product.subCategory = subCategory;
+  product.stock = stock;
+  product.brand = brand;
+  product.comparePrice = comparePrice;
+  product.features = features;
+  product.tags = tags;
+  product.unit = unit || 'KG';
+
+  // Add new images to existing ones if any
+  if (imageUrls.length > 0) {
+    product.images = [...(product.images || []), ...imageUrls];
+  }
+
   await product.save();
-  res.json(product);
+  res.json({ message: 'Product updated successfully', product });
 });
 
 // Admin: Delete product
