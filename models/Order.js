@@ -156,6 +156,24 @@ const orderSchema = new mongoose.Schema({
   isEarningsCredited: {
     type: Boolean,
     default: false
+  },
+  orderIdempotencyKey: {
+    type: String,
+    unique: true,
+    sparse: true // Allows multiple null values
+  },
+  coupon: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Coupon'
+  },
+  discount: {
+    type: Number,
+    default: 0
+  },
+  razorpayOrderId: {
+    type: String,
+    unique: true,
+    sparse: true
   }
 }, {
   timestamps: true
@@ -168,6 +186,7 @@ orderSchema.index({ seller: 1 });
 orderSchema.index({ orderStatus: 1 });
 orderSchema.index({ paymentStatus: 1 });
 orderSchema.index({ createdAt: -1 });
+orderSchema.index({ orderIdempotencyKey: 1 });
 
 // Pre-save middleware to generate order number
 orderSchema.pre('save', async function(next) {

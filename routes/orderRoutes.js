@@ -14,6 +14,7 @@ router.post('/payments/razorpay/verify', paymentController.verifyRazorpayPayment
 router.post('/payments/razorpay/capture', paymentController.capturePaymentForOrders);
 
 router.post('/', orderController.createOrder);
+router.post('/razorpay', orderController.createOrderForRazorpay);
 router.get('/', orderController.getOrders);
 router.get('/:id', orderController.getOrder);
 router.put('/:id/status', orderController.updateOrderStatus);

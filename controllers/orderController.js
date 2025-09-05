@@ -3,6 +3,7 @@ const Product = require('../models/Product');
 const Seller = require('../models/Seller');
 const User = require('../models/User');
 const { asyncHandler } = require('../middleware/errorMiddleware');
+const mongoose = require('mongoose');
 
 // Create Order: Splits cart by seller, creates separate orders for each seller
 exports.createOrder = asyncHandler(async (req, res) => {
@@ -12,8 +13,26 @@ exports.createOrder = asyncHandler(async (req, res) => {
   
   console.log('Creating order with data:', req.body);
   
-  const { shippingAddress, items, paymentMethod, cardData, coupon, discount, total } = req.body;
+  const { shippingAddress, items, paymentMethod, cardData, coupon, discount, total, orderIdempotencyKey } = req.body;
   const userId = req.user._id;
+
+  // Check for duplicate order using idempotency key
+  if (orderIdempotencyKey) {
+    const existingOrder = await Order.findOne({ 
+      user: userId, 
+      orderIdempotencyKey: orderIdempotencyKey,
+      createdAt: { $gte: new Date(Date.now() - 5 * 60 * 1000) } // Within last 5 minutes
+    });
+    
+    if (existingOrder) {
+      console.log('Duplicate order prevented:', orderIdempotencyKey);
+      return res.status(200).json({ 
+        message: 'Order already exists', 
+        orders: [existingOrder],
+        isDuplicate: true 
+      });
+    }
+  }
 
   // Validate required fields
   if (!shippingAddress || !items || !paymentMethod) {
@@ -50,13 +69,18 @@ exports.createOrder = asyncHandler(async (req, res) => {
     itemsBySeller[item.seller].push(item);
   }
 
-  const createdOrders = [];
-  const totalOrderValue = items.reduce((sum, item) => {
-    // We need to calculate the total value to distribute discount proportionally
-    return sum + (item.price * item.quantity);
-  }, 0);
-  
-  for (const sellerId of Object.keys(itemsBySeller)) {
+  // Start database transaction
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const createdOrders = [];
+    const totalOrderValue = items.reduce((sum, item) => {
+      // We need to calculate the total value to distribute discount proportionally
+      return sum + (item.price * item.quantity);
+    }, 0);
+    
+    for (const sellerId of Object.keys(itemsBySeller)) {
     const sellerItems = itemsBySeller[sellerId];
     
     try {
@@ -107,7 +131,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
     // Distribute discount proportionally based on order value
     const sellerDiscount = totalOrderValue > 0 ? (discount || 0) * (itemsPrice / totalOrderValue) : 0;
     const totalPrice = itemsPrice + shippingPrice + taxPrice - sellerDiscount;
-    // Save order
+    // Save order with session
     const order = new Order({
       user: userId,
       seller: sellerId,
@@ -133,12 +157,15 @@ exports.createOrder = asyncHandler(async (req, res) => {
       shippingStatus: 'pending',
       coupon: coupon || undefined,
       discount: discount || 0,
+      orderIdempotencyKey: orderIdempotencyKey || undefined,
     });
-      await order.save();
+      await order.save({ session });
       createdOrders.push(order);
       console.log(`Order created for seller ${sellerId}:`, order._id);
     } catch (error) {
       console.error(`Error creating order for seller ${sellerId}:`, error);
+      await session.abortTransaction();
+      session.endSession();
       return res.status(500).json({ 
         message: `Failed to create order: ${error.message}`, 
         route: req.originalUrl || req.url 
@@ -146,8 +173,211 @@ exports.createOrder = asyncHandler(async (req, res) => {
     }
   }
   
+  // Commit transaction
+  await session.commitTransaction();
+  session.endSession();
+  
   console.log(`Total orders created: ${createdOrders.length}`);
   res.status(201).json({ orders: createdOrders });
+  
+  } catch (error) {
+    // Rollback transaction on any error
+    await session.abortTransaction();
+    session.endSession();
+    console.error('Order creation transaction failed:', error);
+    return res.status(500).json({ 
+      message: 'Failed to create order due to system error', 
+      route: req.originalUrl || req.url 
+    });
+  }
+});
+
+// Create Order for Razorpay (after payment verification)
+exports.createOrderForRazorpay = asyncHandler(async (req, res) => {
+  if (!req.user || !req.user._id) {
+    return res.status(401).json({ message: 'User not authenticated', route: req.originalUrl || req.url });
+  }
+  
+  console.log('Creating Razorpay order with data:', req.body);
+  
+  const { shippingAddress, items, paymentMethod, coupon, discount, total, orderIdempotencyKey, razorpay_order_id } = req.body;
+  const userId = req.user._id;
+
+  // Check for duplicate order using idempotency key
+  if (orderIdempotencyKey) {
+    const existingOrder = await Order.findOne({ 
+      user: userId, 
+      orderIdempotencyKey: orderIdempotencyKey,
+      createdAt: { $gte: new Date(Date.now() - 5 * 60 * 1000) } // Within last 5 minutes
+    });
+    
+    if (existingOrder) {
+      console.log('Duplicate order prevented:', orderIdempotencyKey);
+      return res.status(200).json({ 
+        message: 'Order already exists', 
+        orders: [existingOrder],
+        isDuplicate: true 
+      });
+    }
+  }
+
+  // Validate required fields
+  if (!shippingAddress || !items || !paymentMethod || !razorpay_order_id) {
+    return res.status(400).json({ 
+      message: 'Missing required fields: shippingAddress, items, paymentMethod, or razorpay_order_id', 
+      route: req.originalUrl || req.url 
+    });
+  }
+
+  if (!Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ 
+      message: 'Items must be a non-empty array', 
+      route: req.originalUrl || req.url 
+    });
+  }
+
+  // Group items by seller
+  const itemsBySeller = {};
+  for (const item of items) {
+    if (!item.product || !item.seller) {
+      return res.status(400).json({ message: 'Product or seller missing in order item.', route: req.originalUrl || req.url });
+    }
+    
+    // Validate product and seller IDs
+    if (typeof item.product !== 'string' || item.product.length !== 24) {
+      return res.status(400).json({ message: 'Invalid product ID format.', route: req.originalUrl || req.url });
+    }
+    
+    if (typeof item.seller !== 'string' || item.seller.length !== 24) {
+      return res.status(400).json({ message: 'Invalid seller ID format.', route: req.originalUrl || req.url });
+    }
+    
+    if (!itemsBySeller[item.seller]) itemsBySeller[item.seller] = [];
+    itemsBySeller[item.seller].push(item);
+  }
+
+  // Start database transaction
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const createdOrders = [];
+    const totalOrderValue = items.reduce((sum, item) => {
+      return sum + (item.price * item.quantity);
+    }, 0);
+    
+    for (const sellerId of Object.keys(itemsBySeller)) {
+      const sellerItems = itemsBySeller[sellerId];
+      
+      try {
+        // Fetch product details for each item
+        const orderItems = await Promise.all(sellerItems.map(async (item) => {
+          const product = await Product.findById(item.product);
+          if (!product) {
+            const error = new Error(`Product not found: ${item.product}`);
+            error.type = 'OrderProductNotFound';
+            throw error;
+          }
+          
+          // Get seller product information
+          const SellerProduct = require('../models/SellerProduct');
+          const sellerProduct = await SellerProduct.findById(item.sellerProduct);
+          if (!sellerProduct) {
+            const error = new Error(`Seller product not found: ${item.sellerProduct}`);
+            error.type = 'OrderSellerProductNotFound';
+            throw error;
+          }
+          
+          // Validate seller matches
+          if (sellerProduct.seller.toString() !== sellerId) {
+            const error = new Error(`Seller mismatch for product ${product._id}`);
+            error.type = 'OrderSellerMismatch';
+            throw error;
+          }
+          
+          // Increment totalSold for the product
+          product.totalSold = (product.totalSold || 0) + item.quantity;
+          await product.save({ session });
+          
+          return {
+            product: product._id,
+            name: product.name,
+            image: product.images && product.images[0] ? product.images[0].url : '',
+            price: sellerProduct.sellerPrice,
+            quantity: item.quantity,
+            sku: product.sku || '',
+          };
+        }));
+      
+      // Calculate totals for this seller's order
+      const itemsPrice = orderItems.reduce((sum, i) => sum + i.price * i.quantity, 0);
+      const shippingPrice = 0;
+      const taxPrice = 0;
+      
+      // Distribute discount proportionally based on order value
+      const sellerDiscount = totalOrderValue > 0 ? (discount || 0) * (itemsPrice / totalOrderValue) : 0;
+      const totalPrice = itemsPrice + shippingPrice + taxPrice - sellerDiscount;
+      
+      // Save order with session
+      const order = new Order({
+        user: userId,
+        seller: sellerId,
+        orderItems,
+        shippingAddress: {
+          type: shippingAddress.type || 'home',
+          firstName: shippingAddress.firstName || '',
+          lastName: shippingAddress.lastName || '',
+          street: shippingAddress.street,
+          city: shippingAddress.city,
+          state: shippingAddress.state,
+          zipCode: shippingAddress.zipCode,
+          country: shippingAddress.country,
+          phone: shippingAddress.phone || '',
+        },
+        paymentMethod: 'razorpay',
+        itemsPrice,
+        taxPrice,
+        shippingPrice,
+        totalPrice,
+        orderStatus: 'pending',
+        paymentStatus: 'pending',
+        shippingStatus: 'pending',
+        coupon: coupon || undefined,
+        discount: discount || 0,
+        orderIdempotencyKey: orderIdempotencyKey || undefined,
+        razorpayOrderId: razorpay_order_id,
+      });
+        await order.save({ session });
+        createdOrders.push(order);
+        console.log(`Order created for seller ${sellerId}:`, order._id);
+      } catch (error) {
+        console.error(`Error creating order for seller ${sellerId}:`, error);
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(500).json({ 
+          message: `Failed to create order: ${error.message}`, 
+          route: req.originalUrl || req.url 
+        });
+      }
+    }
+    
+    // Commit transaction
+    await session.commitTransaction();
+    session.endSession();
+    
+    console.log(`Total orders created: ${createdOrders.length}`);
+    res.status(201).json({ orders: createdOrders });
+    
+  } catch (error) {
+    // Rollback transaction on any error
+    await session.abortTransaction();
+    session.endSession();
+    console.error('Order creation transaction failed:', error);
+    return res.status(500).json({ 
+      message: 'Failed to create order due to system error', 
+      route: req.originalUrl || req.url 
+    });
+  }
 });
 
 // Get Orders: For user or seller

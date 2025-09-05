@@ -76,6 +76,21 @@ exports.capturePaymentForOrders = asyncHandler(async (req, res) => {
     return res.status(400).json({ message: 'Missing payment fields' });
   }
 
+  // Check if orders are already paid to prevent duplicate payments
+  const orders = await Order.find({ _id: { $in: orderIds } });
+  if (orders.length !== orderIds.length) {
+    return res.status(404).json({ message: 'Some orders not found' });
+  }
+
+  // Check if any order is already paid
+  const alreadyPaidOrders = orders.filter(order => order.paymentStatus === 'paid');
+  if (alreadyPaidOrders.length > 0) {
+    return res.status(400).json({ 
+      message: 'Some orders are already paid', 
+      alreadyPaid: alreadyPaidOrders.map(o => o._id) 
+    });
+  }
+
   // Verify signature again on server side for safety
   const keySecret = process.env.RAZORPAY_KEY_SECRET;
   const hmac = crypto
@@ -84,11 +99,6 @@ exports.capturePaymentForOrders = asyncHandler(async (req, res) => {
     .digest('hex');
   if (hmac !== razorpay_signature) {
     return res.status(400).json({ message: 'Invalid payment signature' });
-  }
-
-  const orders = await Order.find({ _id: { $in: orderIds } });
-  if (orders.length !== orderIds.length) {
-    return res.status(404).json({ message: 'Some orders not found' });
   }
 
   // Ensure all orders belong to the current user
