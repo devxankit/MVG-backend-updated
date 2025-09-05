@@ -8,6 +8,16 @@ const userSchema = new mongoose.Schema({
     trim: true,
     maxlength: [50, 'Name cannot be more than 50 characters']
   },
+  firstName: {
+    type: String,
+    trim: true,
+    maxlength: [25, 'First name cannot be more than 25 characters']
+  },
+  lastName: {
+    type: String,
+    trim: true,
+    maxlength: [25, 'Last name cannot be more than 25 characters']
+  },
   email: {
     type: String,
     required: [true, 'Please provide an email'],
@@ -35,7 +45,34 @@ const userSchema = new mongoose.Schema({
   },
   phone: {
     type: String,
-    default: ''
+    default: '',
+    match: [/^[6-9]\d{9}$/, 'Please provide a valid 10-digit phone number']
+  },
+  address: {
+    type: String,
+    trim: true,
+    maxlength: [200, 'Address cannot be more than 200 characters']
+  },
+  city: {
+    type: String,
+    trim: true,
+    maxlength: [50, 'City cannot be more than 50 characters']
+  },
+  state: {
+    type: String,
+    trim: true,
+    maxlength: [50, 'State cannot be more than 50 characters']
+  },
+  pincode: {
+    type: String,
+    trim: true,
+    match: [/^[1-9][0-9]{5}$/, 'Please provide a valid 6-digit pincode']
+  },
+  country: {
+    type: String,
+    default: 'India',
+    trim: true,
+    maxlength: [50, 'Country cannot be more than 50 characters']
   },
   addresses: [{
     type: {

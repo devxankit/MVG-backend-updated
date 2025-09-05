@@ -38,14 +38,73 @@ exports.updateProfile = asyncHandler(async (req, res) => {
   if (!user) {
     return res.status(404).json({ message: 'User not found', route: req.originalUrl || req.url });
   }
-  const { name, email, phone, avatar } = req.body;
-  if (name) user.name = name;
-  if (email) user.email = email;
-  if (phone) user.phone = phone;
-  if (avatar) user.avatar = avatar;
-  await user.save();
-  const updatedUser = await User.findById(req.user._id).select('-password');
-  res.json({ user: updatedUser });
+
+  const { 
+    firstName, 
+    lastName, 
+    email, 
+    phone, 
+    address, 
+    city, 
+    state, 
+    pincode, 
+    country, 
+    avatar 
+  } = req.body;
+
+  // Prevent email updates for security reasons
+  if (email !== undefined && email !== user.email) {
+    return res.status(400).json({
+      success: false,
+      message: 'Email cannot be changed',
+      errors: ['Email address cannot be modified for security reasons. Please contact support if you need to change your email.']
+    });
+  }
+
+  // Update fields if provided (excluding email)
+  if (firstName !== undefined) user.firstName = firstName;
+  if (lastName !== undefined) user.lastName = lastName;
+  if (phone !== undefined) user.phone = phone;
+  if (address !== undefined) user.address = address;
+  if (city !== undefined) user.city = city;
+  if (state !== undefined) user.state = state;
+  if (pincode !== undefined) user.pincode = pincode;
+  if (country !== undefined) user.country = country;
+  if (avatar !== undefined) user.avatar = avatar;
+
+  // Update the main name field if firstName and lastName are provided
+  if (firstName && lastName) {
+    user.name = `${firstName} ${lastName}`.trim();
+  }
+
+  try {
+    await user.save();
+    const updatedUser = await User.findById(req.user._id).select('-password');
+    res.json({ 
+      success: true,
+      data: updatedUser,
+      message: 'Profile updated successfully'
+    });
+  } catch (error) {
+    if (error.name === 'ValidationError') {
+      const errors = Object.values(error.errors).map(err => err.message);
+      return res.status(400).json({ 
+        success: false,
+        message: 'Validation error',
+        errors: errors
+      });
+    }
+    if (error.code === 11000) {
+      // Handle duplicate key error
+      const field = Object.keys(error.keyPattern)[0];
+      return res.status(400).json({
+        success: false,
+        message: `${field} already exists`,
+        errors: [`This ${field} is already registered with another account`]
+      });
+    }
+    throw error;
+  }
 });
 
 // Get user's cart
